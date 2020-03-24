@@ -1,5 +1,5 @@
 Name: tmt
-Version: 0.8
+Version: 0.11
 Release: 1%{?dist}
 
 Summary: Test Management Tool
@@ -44,6 +44,8 @@ BuildRequires: python%{python3_pkgversion}-pytest
 BuildRequires: python%{python3_pkgversion}-click
 BuildRequires: python%{python3_pkgversion}-fmf
 BuildRequires: python%{python3_pkgversion}-mock
+BuildRequires: python%{python3_pkgversion}-requests
+BuildRequires: python%{python3_pkgversion}-testcloud
 %{?python_provide:%python_provide python%{python3_pkgversion}-%{name}}
 %if %{with oldreqs}
 Requires:       python%{python3_pkgversion}-PyYAML
@@ -54,11 +56,30 @@ The tmt Python module and command line tool implement the test
 metadata specification (L1 and L2) and allows easy test execution.
 This package contains the Python 3 module.
 
+%package container
+Summary: Container provisioner for the Test Management Tool
+Requires: tmt == %{version}-%{release}
+Requires: ansible podman
+
+%description container
+All dependencies of the Test Management Tool required to run tests
+in a container environment.
+
+%package testcloud
+Summary: Libvirt (via testcloud) provisioner for the Test Management Tool
+Requires: tmt == %{version}-%{release}
+Requires: ansible python%{python3_pkgversion}-testcloud openssh-clients rsync
+
+%description testcloud
+All dependencies of the Test Management Tool required to run tests
+in a libvirt environment provisioned using testcloud.
 
 %package all
 Summary: Extra dependencies for the Test Management Tool
-Requires: tmt == %{version}-%{release}
-Requires: vagrant vagrant-libvirt python3-nitrate
+Requires: tmt >= %{version}
+Requires: tmt-container >= %{version}
+Requires: tmt-testcloud >= %{version}
+Requires: vagrant python3-nitrate make
 
 %description all
 All extra dependencies of the Test Management Tool. Install this
@@ -114,11 +135,136 @@ export LANG=en_US.utf-8
 %license LICENSE
 
 
+%files container
+%license LICENSE
+
+
+%files testcloud
+%license LICENSE
+
+
 %files all
 %license LICENSE
 
 
 %changelog
+* Mon Mar 23 2020 Petr Šplíchal <psplicha@redhat.com> - 0.11-1
+- Merge default images for podman/testcloud [#169]
+- Do not export empty environment to run.sh
+- Merge vagrant check for running connection [#156]
+- Adjust vagrant check for running connection
+- Merge test export into nitrate [#118]
+- Adjust 'tmt test export --nitrate' implementation
+- Use fedora as a default image for podman/testcloud
+- Move testcloud back to the extra requires
+- Always copy directory tree to the workdir
+- Add an example with test and plan in a single file
+- Do not run tests with an empty environment
+- Check for non-zero status upon yaml syntax errors
+- Export test cases to nitrate
+- Merge test import using testinfo.desc [#160]
+- Adjust test import using testinfo.desc
+- Use testinfo.desc as source of metadata
+- Add environment support to the discover step (#145)
+- Add a new story describing user and system config (#143)
+- Check if connection is running in Vagrant Provision
+
+* Wed Mar 11 2020 Petr Šplíchal <psplicha@redhat.com> - 0.10-1
+- Merge fixed environment support in run.sh [#99]
+- Add container and testcloud to tmt-all requires (#157)
+- Rename dict_to_shell() to better match content
+- Make path mandatory in run.sh.
+- Handle execution better in run.sh
+- Implement --env for testcloud provisioner
+- Merge run --environment support for podman [#132]
+- Fix container destroy, plus some minor adjustments
+- Use cache 'unsafe' for testcloud (#150)
+- Add --env option and support in podman provisioner
+- Warn about missing metadata tree before importing
+- Move testcloud to base requires, update README (#153)
+- Destroy container in finish only if there is any
+- Merge tmt test import --nitrate --disabled [#146]
+- Adjust the disabled test import implementation
+- Add an overview of classes (where are we heading)
+- Import non-disabled tests
+- Add a 'Provision Options' section, update coverage
+- Support selecting objects under the current folder
+- Add a link to details about fmf inheritance
+- Move requirements under the Install section
+- Mock testcloud modules to successfully build docs
+- Include examples of plan inheritance [fix #127]
+- Update implementation coverage for cli stories
+- Add testcloud provisioner (#134)
+- Merge the new story for 'tmt run --latest' [#136]
+- Move run --latest story under run, fix code block
+- Fix invalid variable name in the convert example
+- Use 'skip' instead of 'without', simplify default
+- Add rerun cli shortcut
+- Make sure we run finish always
+- Update the docs making '--name=' necessary (#138)
+- Clarify environment priority, fix release typo
+- Add environment specification
+- Remove copr build job from packit (not necessary)
+- Use the 'extra-summary' in the output as well
+- Use 'nitrate' consistently for tcms-related stuff
+- Prefix all non-specification keys [fix #120]
+- Show a nice error for an invalid yaml [fix #121]
+- Move container plan to common provision examples
+- Remove tmt-all dependency on vagrant-libvirt
+- Do not use red for import info messages [fix #125]
+- Show a nice error for weird Makefiles [fix #108]
+
+* Mon Feb 24 2020 Petr Šplíchal <psplicha@redhat.com> - 0.9-1
+- Rename the 'test convert' command to 'test import'
+- Include 'path' when importing virtual test cases
+- Extract test script from Makefile during convert
+- Do not import 'fmf-export' tag from nitrate [#119]
+- Merge the improved component import [#115]
+- Several adjustments to the component import
+- Merge the improved requires parsing [#113]
+- Fix parsing multiple requires from Makefile
+- Fail nicely if executed without provision (#112)
+- Make sure the copr command is available in dnf
+- Fix handling defaults for options, adjust wording
+- Read 'components' from nitrate when converting
+- Read requires as list when converting tests
+- Make it possible to pass script on cmdline
+- Mention libvirt and rsync in Fedora 30 workaround
+- Move podman image check and pull under go()
+- Simple destroy implementation for podman provision
+- Add Fedora 30 installation instructions [fix #105]
+- Merge podman support for the provision step [#106]
+- Several adjustments to the podman implementation
+- Fix _prepare_shell in podman provisioner
+- Add podman provisioner
+- Update the test case relevancy specification (#102)
+- Move copy_from_guest to provision/base.py (#75)
+- Several minor adjustments to the restraint story
+- Add user story for restraint
+- Merge different summaries for subpackages [#97]
+- Remove macro from the tmt-all subpackage summary
+- Add different summaries for sub-packages
+- Mention 'fmf-export' tag in the test export story
+- Merge optional PURPOSE in test convert [#89]
+- Handle missing duration or nitrate case in convert
+- Add support for wrap='auto' in utils.format()
+- Use local fmf repository for the basic plan (#94)
+- Merge test import documentation updates [#90]
+- Merge tag, status, pepa & hardware for test import
+- Several test import adjustments related to #91
+- Fix deduplication bug when converting tests
+- Read more attributes from nitrate when converting
+- Update examples doc for converting tests
+- Update execute step examples for shell
+- Simplify packit configuration using 'fedora-all' (#88)
+- Optional attributes when converting.
+- Update execute and report step specification
+- Add spec for results.yaml and report.yaml (#66)
+- Add a story for exporting tests into nitrate (#83)
+- Add the 'require' attribute into the L1 Metadata
+- Update the Metadata Specification link in README
+- Improve 'tmt test convert' command implementation
+
 * Wed Jan 15 2020 Petr Šplíchal <psplicha@redhat.com> - 0.8-1
 - Do not create bash completion script during build
 - Require the same version, fix changelog entry

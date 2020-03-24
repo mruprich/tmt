@@ -13,13 +13,6 @@ actions:
   - make packit-path
 
 jobs:
-- job: copr_build
-  trigger: pull_request
-  metadata:
-    targets:
-      - fedora-all
-      - epel-8
-
 - job: tests
   trigger: pull_request
   metadata:

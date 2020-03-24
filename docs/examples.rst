@@ -152,6 +152,12 @@ condition::
     $ tmt tests ls --condition 'tier > 0'
     /tests/ls
 
+In order to select tests under the current working directory use
+the single dot notation::
+
+    $ tmt test show .
+    $ tmt run test --name .
+
 
 Lint Tests
 ------------------------------------------------------------------
@@ -313,6 +319,38 @@ Options ``-f`` or ``--force`` can be used to overwrite existing
 files.
 
 
+Inherit Plans
+------------------------------------------------------------------
+
+If several plans share similar content it is possible to use
+inheritance to prevent unnecessary duplication of the data::
+
+    discover:
+        how: fmf
+        repository: https://github.com/psss/tmt
+    prepare:
+        how: ansible
+        playbooks: ansible/packages.yml
+    execute:
+        how: beakerlib
+
+    /basic:
+        summary: Quick set of basic functionality tests
+        discover+:
+            filter: tier:1
+
+    /features:
+        summary: Detailed tests for individual features
+        discover+:
+            filter: tier:2
+
+Note that a ``+`` sign should be used if you want to extend the
+parent data instead of replacing them. See the `fmf features`_
+documentation for a detailed description of the hierarchy,
+inheritance and merging attributes.
+
+.. _fmf features: https://fmf.readthedocs.io/en/latest/features.html
+
 
 Stories
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -388,6 +426,11 @@ available for binary status filtering::
      implemented /tmt/cli
       documented /tmt/cli
     ...
+
+In order to select stories under the current working directory use
+the single dot notation::
+
+    $ tmt story show .
 
 
 Story Coverage
@@ -597,6 +640,40 @@ In order to execute all test steps while providing arguments to
 some of them it is possible to use the ``--all`` option::
 
     tmt run --all provision --how=local
+
+
+Provision Options
+------------------------------------------------------------------
+
+By default, tests are executed under a virtual machine so that
+your laptop is not affected by unexpected changes. The following
+commands are equivalent::
+
+    tmt run
+    tmt run -a provision -h virtual
+    tmt run --all provision --how=virtual
+
+You can also use an alternative virtual machine implementation
+using the ``testcloud`` provisioner::
+
+    tmt run --all provision --how=virtual.testcloud
+
+If you already have a box ready for testing with ``ssh`` enabled,
+use the ``connect`` method::
+
+    tmt run --all provision --how=connect --guest=name-or-ip --user=login --password=secret
+    tmt run --all provision --how=connect --guest=name-or-ip --key=private-key-path
+
+The ``container`` method allows to execute tests in a container
+using ``podman``::
+
+    tmt run --all provision --how=container --image=fedora:latest
+
+If you are confident that tests are safe you can execute them
+directly on your ``local`` host::
+
+    tmt run --all provision --how=local
+
 
 
 Debug Tests

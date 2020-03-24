@@ -9,6 +9,7 @@ import pprint
 
 import tmt.steps
 import tmt.utils
+import tmt.export
 import tmt.templates
 
 import tmt.steps.discover
@@ -22,6 +23,7 @@ from tmt.utils import verdict
 from fmf.utils import listed
 from click import echo, style
 
+DEFAULT_TEST_DURATION = '5m'
 
 class Node(tmt.utils.Common):
     """
@@ -47,6 +49,25 @@ class Node(tmt.utils.Common):
         """ Show source files """
         echo(tmt.utils.format(
             'sources', self.node.sources, key_color='magenta'))
+
+    @classmethod
+    def _save_context(cls, context):
+        """ Save provided command line context for future use """
+        super(Node, cls)._save_context(context)
+
+        # Handle '.' as an alias for the current working directory
+        names = cls._opt('names')
+        if names is not None and '.' in names:
+            root = context.obj.tree.root
+            current = os.getcwd()
+            # Handle special case when directly in the metadata root
+            if current == root:
+                path = '/'
+            # Prepare path from the tree root to the current directory
+            else:
+                path = os.path.join('/', os.path.relpath(current, root))
+            cls._context.params['names'] = (
+                path if name == '.' else name for name in names)
 
     def name_and_summary(self):
         """ Node name and optional summary """
@@ -90,7 +111,7 @@ class Test(Node):
         'duration',
         'environment',
         'relevancy',
-        'tags',
+        'tag',
         'tier',
         'result',
         'enabled',
@@ -105,6 +126,17 @@ class Test(Node):
         # Path defaults to the node name
         if self.path is None:
             self.path = self.name
+        # Convert tag and component into a list
+        if self.tag is None:
+            self.tag = list()
+        if self.component is None:
+            self.component = list()
+        # Convert environment into a dictionary
+        if self.environment is None:
+            self.environment = dict()
+        # Default duration
+        if self.duration is None:
+            self.duration = DEFAULT_TEST_DURATION
         # Handle other default values
         if self.enabled is None:
             disabled = self.node.get('disabled')
@@ -173,7 +205,7 @@ class Test(Node):
         elif len(self.summary) > 50:
             echo(verdict(2, 'summary should not exceed 50 characters'))
 
-    def export(self, format_='yaml', keys=None):
+    def export(self, format_='yaml', keys=None, environment=None):
         """
         Export test data into requested format
 
@@ -181,20 +213,33 @@ class Test(Node):
         format 'execute' used by the execute step which returns
         (test-name, test-data) tuples.
         """
-        if format_ != 'execute':
-            return super(Test, self).export(format_, keys)
 
         # Prepare special format for the executor
-        name = self.name
-        data = dict()
-        data['test'] = self.test
-        data['path'] = self.path
-        if self.duration is not None:
-            data['duration'] = self.duration
-        if self.environment is not None:
-            data['environment'] = ' '.join(
-                tmt.utils.dict_to_shell(self.environment))
-        return name, data
+        if format_ == 'execute':
+            name = self.name
+            data = dict()
+            data['test'] = self.test
+            data['path'] = self.path
+            if self.duration is not None:
+                data['duration'] = self.duration
+            # Combine environment variables (plan overrides test)
+            if self.environment or environment:
+                combined_environment = dict()
+                if self.environment:
+                    combined_environment.update(self.environment)
+                if environment:
+                    combined_environment.update(environment)
+                data['environment'] = ' '.join(
+                    tmt.utils.shell_variables(self.environment))
+            return name, data
+
+        # Export to Nitrate test case management system
+        elif format_ == 'nitrate':
+            return tmt.export.export_to_nitrate(self)
+
+        # Common node export otherwise
+        else:
+            return super(Test, self).export(format_, keys)
 
 
 class Plan(Node):
@@ -230,6 +275,9 @@ class Plan(Node):
             if not isinstance(gates, list):
                 gates = [gates]
 
+        # Environment variables
+        self.environment = node.get('environment')
+
     @staticmethod
     def overview(tree):
         """ Show overview of available plans """
@@ -261,14 +309,17 @@ class Plan(Node):
             path=plan_path, content=content,
             name='plan', force=force)
 
-    def steps(self, enabled=True, disabled=False, names=False):
+    def steps(self, enabled=True, disabled=False, names=False, skip=[]):
         """
         Iterate over enabled / all steps
 
         Yields instances of all enabled steps by default. Use 'names' to
         yield step names only and 'disabled=True' to iterate over all.
+        Use 'skip' to pass the list of steps to be skipped.
         """
         for name in tmt.steps.STEPS:
+            if name in skip:
+                continue
             step = getattr(self, name)
             if (enabled and step.enabled or disabled and not step.enabled):
                 yield name if names else step
@@ -278,6 +329,9 @@ class Plan(Node):
         self.ls(summary=True)
         for step in self.steps(disabled=True):
             step.show()
+        if self.environment is not None:
+            echo(tmt.utils.format(
+                'environment', self.environment, key_color='blue'))
         if self.opt('verbose'):
             self._sources()
 
@@ -301,9 +355,14 @@ class Plan(Node):
         # Wake up all steps
         for step in self.steps(disabled=True):
             step.wake()
-        # Run enabled steps
-        for step in self.steps():
-            step.go()
+        # Run enabled steps except 'finish'
+        try:
+            for step in self.steps(skip=['finish']):
+                step.go()
+        # Make sure we run 'finish' step always if enabled
+        finally:
+            if self.finish.enabled:
+                self.finish.go()
 
 
 class Story(Node):
@@ -463,6 +522,8 @@ class Tree(tmt.utils.Common):
                 raise tmt.utils.GeneralError(
                     "No metadata found in the '{0}' directory.".format(
                         self._path))
+            except fmf.utils.FileError as error:
+                raise tmt.utils.GeneralError(f"Invalid yaml syntax: {error}")
         return self._tree
 
     @property

@@ -15,7 +15,8 @@ discover:
 prepare:
     how: shell
     script:
-    # we need to enable vagrant on CentoOS/RHEL
+    - dnf install -y 'dnf-command(copr)'
+    # we need to enable vagrant copr on CentOS/RHEL
     - grep -q "Fedora" /etc/os-release || sudo dnf copr enable -y pvalena/vagrant
     - sudo dnf copr enable -y psss/tmt
     - sudo dnf install -y tmt vagrant-libvirt vagrant-rsync-back vagrant-managed-servers

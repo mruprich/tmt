@@ -8,6 +8,7 @@ from tmt.utils import ConvertError, StructuredFieldError
 
 import fmf.utils
 import tmt.utils
+import subprocess
 import pprint
 import copy
 import yaml
@@ -15,12 +16,6 @@ import re
 import os
 
 log = fmf.utils.Logging('tmt').logger
-
-# Import nitrate conditionally (reading from nitrate can be skipped)
-try:
-    from nitrate import TestCase
-except ImportError:
-    TestCase = None
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #  YAML
@@ -51,51 +46,119 @@ except AttributeError:
 #  Convert
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def read(path, makefile, nitrate, purpose):
+def read(path, makefile, nitrate, purpose, disabled):
     """
     Read old metadata from various sources
 
     Returns tuple (common_data, individual_data) where 'common_data' are
     metadata which belong to main.fmf and 'individual_data' contains
-    data for individual testcases (if multiple tcms testcases found).
+    data for individual testcases (if multiple nitrate testcases found).
     """
 
     data = dict()
-    echo(style("Checking the '{0}' directory.".format(path), fg='red'))
+    echo("Checking the '{0}' directory.".format(path))
 
-    # Makefile (extract summary, component, duration and requires)
+    # Make sure there is a metadata tree initialized
+    try:
+        tree = fmf.Tree(path)
+    except fmf.utils.RootError:
+        raise ConvertError("Initialize metadata tree using 'tmt init'.")
+
+    # Makefile (extract summary, test, duration and requires)
     if makefile:
         echo(style('Makefile ', fg='blue'), nl=False)
         makefile_path = os.path.join(path, 'Makefile')
         try:
-            with open(makefile_path, encoding='utf-8') as makefile:
-                content = makefile.read()
+            with open(makefile_path, encoding='utf-8') as makefile_file:
+                makefile = makefile_file.read()
         except IOError:
             raise ConvertError("Unable to open '{0}'.".format(makefile_path))
         echo("found in '{0}'.".format(makefile_path))
+
+        # If testinfo.desc exists read it to preserve content and remove it
+        testinfo_path = os.path.join(path, 'testinfo.desc')
+        if os.path.isfile(testinfo_path):
+            try:
+                with open(testinfo_path, encoding='utf-8') as testinfo:
+                    old_testinfo = testinfo.read()
+                    os.remove(testinfo_path)
+            except IOError:
+                raise ConvertError(
+                    "Unable to open '{0}'.".format(testinfo_path))
+        else:
+            old_testinfo = None
+
+        # Make Makefile 'makeable' without extra dependecies
+        # (replace targets, make include optional and remove rhts-lint)
+        makefile = makefile.replace('$(METADATA)', 'testinfo.desc')
+        makefile = makefile.replace(
+            'include /usr/share/rhts/lib/rhts-make.include',
+            '-include /usr/share/rhts/lib/rhts-make.include')
+        makefile = makefile.replace('rhts-lint testinfo.desc', '')
+
+        # Create testinfo.desc file with resolved variables
+        try:
+            process = subprocess.run(
+                ["make", "testinfo.desc", "-C", path, "-f", "-"],
+                input=makefile, check=True, encoding='utf-8',
+                stdout=subprocess.DEVNULL)
+        except FileNotFoundError:
+            raise ConvertError(
+                "Install 'make' to convert metadata from Makefile.")
+        except subprocess.CalledProcessError:
+            raise ConvertError(
+                "Failed to convert metadata using 'make testinfo.desc'.")
+
+        # Read testinfo.desc
+        try:
+            with open(testinfo_path, encoding='utf-8') as testinfo_file:
+                testinfo = testinfo_file.read()
+        except IOError:
+            raise ConvertError("Unable to open '{0}'.".format(testinfo_path))
+
         # Beaker task name
-        beaker_task = re.search('export TEST=(.*)\n', content).group(1)
-        echo(style('test: ', fg='green') + beaker_task)
+        try:
+            beaker_task = re.search(r'Name:\s*(.*)\n', testinfo).group(1)
+            echo(style('task: ', fg='green') + beaker_task)
+            data['extra-task'] = beaker_task
+        except AttributeError:
+            raise ConvertError("Unable to parse 'Name' from testinfo.desc.")
         # Summary
         data['summary'] = re.search(
-            r'echo "Description:\s*(.*)"', content).group(1)
-        echo(style('description: ', fg='green') + data['summary'])
+            r'^Description:\s*(.*)\n', testinfo, re.M).group(1)
+        echo(style('summary: ', fg='green') + data['summary'])
+        # Test script
+        data['test'] = re.search('^run:.*\n\t(.*)$', makefile, re.M).group(1)
+        echo(style('test: ', fg='green') + data['test'])
         # Component
         data['component'] = re.search(
-            r'echo "RunFor:\s*(.*)"', content).group(1)
-        echo(style('component: ', fg='green') + data['component'])
+            r'^RunFor:\s*(.*)', testinfo, re.M).group(1).split()
+        echo(style('component: ', fg='green') + ' '.join(data['component']))
         # Duration
         try:
             data['duration'] = re.search(
-                r'echo "TestTime:\s*(.*)"', content).group(1)
+                r'^TestTime:\s*(.*)', testinfo, re.M).group(1)
             echo(style('duration: ', fg='green') + data['duration'])
         except AttributeError:
             pass
         # Requires and RhtsRequires (optional)
-        requires = re.findall(r'echo "(?:Rhts)?Requires:\s*(.*)"', content)
+        requires = re.findall(r'^(?:Rhts)?Requires:\s*(.*)', testinfo, re.M)
         if requires:
-            data['require'] = requires
+            data['require'] = [
+                require for line in requires for require in line.split()]
             echo(style('require: ', fg='green') + ' '.join(data['require']))
+
+        # Restore the original testinfo.desc content (if existed)
+        if old_testinfo:
+            try:
+                with open(testinfo_path, 'w', encoding='utf-8') as testinfo:
+                    testinfo.write(old_testinfo)
+            except IOError:
+                raise ConvertError(
+                    "Unable to write '{0}'.".format(testinfo_path))
+        # Remove created testinfo.desc otherwise
+        else:
+            os.remove(testinfo_path)
 
     # Purpose (extract everything after the header as a description)
     if purpose:
@@ -115,7 +178,8 @@ def read(path, makefile, nitrate, purpose):
 
     # Nitrate (extract contact, environment and relevancy)
     if nitrate:
-        common_data, individual_data = read_nitrate(beaker_task, data)
+        common_data, individual_data = read_nitrate(
+            beaker_task, data, disabled)
     else:
         common_data = data
         individual_data = []
@@ -125,20 +189,34 @@ def read(path, makefile, nitrate, purpose):
     return common_data, individual_data
 
 
-def read_nitrate(beaker_task, common_data):
+def read_nitrate(beaker_task, common_data, disabled):
     """ Read old metadata from nitrate test cases """
 
-    # Check test case, make sure nitrate is available
+    # Need to import nitrate only when really needed. Otherwise we get
+    # traceback when nitrate not installed or config file not available.
+    try:
+        import nitrate
+    except ImportError:
+        raise ConvertError('Install nitrate module to import metadata.')
+
+    # Check test case
     echo(style('Nitrate ', fg='blue'), nl=False)
     if beaker_task is None:
         raise ConvertError('No test name detected for nitrate search')
-    if TestCase is None:
-        raise ConvertError('Need nitrate module to import metadata')
 
-    # Find testcases that have CONFIRMED status
-    testcases = list(TestCase.search(script=beaker_task, case_status=2))
+    # Find all testcases
+    try:
+        if disabled:
+            testcases = list(nitrate.TestCase.search(script=beaker_task))
+        # Find testcases that do not have 'DISABLED' status
+        else:
+            testcases = list(nitrate.TestCase.search(
+                script=beaker_task, case_status__in=[1, 2, 4]))
+    except nitrate.NitrateError as error:
+        raise ConvertError(error)
     if not testcases:
-        echo("No testcase found for '{0}'.".format(beaker_task))
+        echo("No {0}testcase found for '{1}'.".format(
+            '' if disabled else 'non-disabled ', beaker_task))
         return common_data, []
     elif len(testcases) > 1:
         echo("Multiple test cases found for '{0}'.".format(beaker_task))
@@ -149,11 +227,11 @@ def read_nitrate(beaker_task, common_data):
         data = dict()
         echo("test case found '{0}'.".format(testcase.identifier))
         # Test identifier
-        data['tcms'] = testcase.identifier
+        data['extra-nitrate'] = testcase.identifier
         # Beaker task name (taken from summary)
         if testcase.summary:
-            data['task'] = testcase.summary
-            echo(style('task: ', fg='green') + data['task'])
+            data['extra-summary'] = testcase.summary
+            echo(style('extra-summary: ', fg='green') + data['extra-summary'])
         # Contact
         if testcase.tester:
             data['contact'] = '{} <{}>'.format(
@@ -163,12 +241,19 @@ def read_nitrate(beaker_task, common_data):
         if testcase.arguments:
             data['environment'] = tmt.utils.variables_to_dictionary(
                 testcase.arguments)
-            echo(style('environment:', fg='green'))
-            echo(pprint.pformat(data['environment']))
+            if not data['environment']:
+                data.pop('environment')
+            else:
+                echo(style('environment:', fg='green'))
+                echo(pprint.pformat(data['environment']))
         # Tags
         if testcase.tags:
-            data['tag'] = sorted([tag.name for tag in testcase.tags])
+            data['tag'] = sorted([
+                tag.name for tag in testcase.tags if tag.name != 'fmf-export'])
             echo(style('tag: ', fg='green') + str(data['tag']))
+        # Component
+        data['component'] = [comp.name for comp in testcase.components]
+        echo(style('component: ', fg='green') + ' '.join(data['component']))
         # Status
         data['enabled'] = testcase.status.name == "CONFIRMED"
         echo(style('enabled: ', fg='green') + str(data['enabled']))
@@ -240,19 +325,14 @@ def read_nitrate(beaker_task, common_data):
 
 def write(path, data):
     """ Write gathered metadata in the fmf format """
-    # Make sure there is a metadata tree initialized
-    try:
-        tree = fmf.Tree(os.path.dirname(path))
-    except fmf.utils.RootError:
-        raise ConvertError("Initialize metadata tree using 'fmf init'.")
     # Store metadata into a fmf file
     try:
         with open(path, 'w', encoding='utf-8') as fmf_file:
             yaml.safe_dump(
-                    data, fmf_file,
-                    encoding='utf-8', allow_unicode=True,
-                    indent=4, default_flow_style=False)
+                data, fmf_file,
+                encoding='utf-8', allow_unicode=True,
+                indent=4, default_flow_style=False)
     except IOError:
         raise ConvertError("Unable to write '{0}'".format(path))
     echo(style(
-        "Metadata successfully stored into '{0}'.".format(path), fg='red'))
+        "Metadata successfully stored into '{0}'.".format(path), fg='magenta'))

@@ -55,6 +55,11 @@ class Common(object):
         return self.name
 
     @classmethod
+    def _save_context(cls, context):
+        """ Save provided command line context for future use """
+        cls._context = context
+
+    @classmethod
     def _opt(cls, option, default=None):
         """ Get an option from the command line context (class version) """
         if cls._context is None:
@@ -70,13 +75,13 @@ class Common(object):
         mode for all included plans and steps).
         """
         # Check local option
-        local = None
+        local = default
         if self._context is not None:
             local = self._context.params.get(option, default)
         # Check parent option
         parent = None
         if self.parent:
-            parent = self.parent.opt(option, default)
+            parent = self.parent.opt(option)
         # Special handling for flags (parent's yes wins)
         if isinstance(parent, bool):
             return parent if parent else local
@@ -308,6 +313,10 @@ class StructuredFieldError(GeneralError):
 #  Utilities
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+def quote(string):
+    """ Surround a string with double quotes """
+    return f'"{string}"'
+
 def ascii(text):
     """ Transliterate special unicode characters into pure ascii """
     try:
@@ -355,8 +364,25 @@ def dictionary_to_yaml(data):
     return output.getvalue()
 
 
-def dict_to_shell(data):
-    """ Convert dictionary to list of key=value pairs """
+def shell_variables(data):
+    """
+    Prepare variables to be consumed by shell
+
+    Convert dictionary or list/tuple of key=value pairs to list of
+    key=value pairs where value is quoted with shlex.quote().
+    """
+
+    # Convert from list/tuple
+    if isinstance(data, list) or isinstance(data, tuple):
+        converted_data = []
+        for item in data:
+            splitted_item = item.split('=')
+            key = splitted_item[0]
+            value = shlex.quote('='.join(splitted_item[1:]))
+            converted_data.append(f'{key}={value}')
+        return converted_data
+
+    # Convert from dictionary
     return [f"{key}={shlex.quote(str(value))}" for key, value in data.items()]
 
 
@@ -412,6 +438,11 @@ def format(
         # Otherwise just place each item on a new line
         else:
             output += ('\n' + indent_string).join(value)
+    # Dictionary
+    elif isinstance(value, dict):
+        # Place each key value pair on a separate line
+        output += ('\n' + indent_string).join(
+            f'{item[0]}: {item[1]}' for item in value.items())
     # Text
     elif isinstance(value, str):
         # In 'auto' mode enable wrapping when long lines present
