@@ -18,7 +18,7 @@ prepare:
     # we need to enable vagrant on CentoOS/RHEL
     - grep -q "Fedora" /etc/os-release || sudo dnf copr enable -y pvalena/vagrant
     - sudo dnf copr enable -y psss/tmt
-    - sudo dnf install -y tmt
+    - sudo dnf install -y tmt vagrant-libvirt vagrant-rsync-back vagrant-managed-servers
 execute:
     how: shell
 artifact:
